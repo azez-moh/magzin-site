@@ -1,0 +1,24 @@
+{
+  "gravityStrength": 26,
+  "angularDamping": 0.06,
+  "magneticHoldTorque": 32,
+  "holdFalloffDeg": 18,
+  "restTopSec": 0.45,
+  "restBottomSec": 0.35,
+  "returnSwingSpeed": 1,
+  "overshootAmount": 0.4,
+  "pieceCount": 3,
+  "pieceLengthMm": 35,
+  "pieceDiameterMm": 5,
+  "assembledLengthMm": 105,
+  "motionBlurStrength": 0.4,
+  "finish": "black",
+  "finishHex": "#26272B",
+  "integrator": {
+    "model": "alpha = (3/N)*(G*sin(theta) - K*wrap(theta)*exp(-(theta/falloff)^2)) - c*omega; bottom-contact restitution omega *= 0.15+0.45*overshoot per crossing",
+    "lengthScaling": "torques x 3/N, rates x sqrt(3/N), rests x sqrt(N/3)",
+    "timestepHz": 120,
+    "scheme": "semi-implicit euler, fixed-step accumulator, render interpolation"
+  },
+  "exportedAt": "2026-08-19T17:05:01.335Z"
+}
