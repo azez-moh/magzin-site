@@ -121,43 +121,31 @@ const H = STICK_LEN / 2;                       // 1.75
 const R_CAP = 0.386;           // Ø8.1 end block
 const R_FACE = 0.339;          // Ø7.1 flat tip face
 const R_BORE = 0.143;          // Ø3.0 center bore
-const R_COLLAR = 0.375;        // Ø7.85 collar
-const R_MID = 0.324;           // Ø6.8 middle body
+const R_COLLAR = 0.364;        // collar just past the cap step (footage: clear step)
+const R_MID = 0.352;           // round waist ~Ø7.4; the CAD's Ø6.8 is measured
+                               // across the flat MAGZIN panel (PANEL_Z below)
 const A_CAP = 1.192;           // cap block spans 12.5 … 18.35 mm
 const A_CHAMFER = 1.655;       // ~1 mm rounded tip edge
 const A_NECK = 0.811;          // collar spans 8.5 … 12.5 mm
-const A_BLEND = 0.668;         // collar → middle blend ends at 7.0 mm
+const A_BLEND = 0.42;          // long, gentle collar → waist blend (footage)
 const A_PLATE = 0.44;          // badge band half-length (anatomy slice)
 const R_TIP = R_FACE;          // beats hinge contact tangent
 
 /* magnet wells: two circumferential rows at ±28° off the meridian, front and
  * back, at ~15.5 mm (cap) and ~10.5 mm (collar) from the piece center */
 const HOLE_ROWS = [1.474, 0.997, -0.997, -1.474];
-// REEL MATCH (2026-10-31): wells sit on the FRONT and BACK faces in pairs,
-// ±26° either side of the badge meridian (phi measured from +Z, the front)
-const HOLE_PHI = [26, 154, 206, 334];
+// PRODUCT TRUTH (flip-reference.mp4): four holes around each row, 45° off the
+// badge meridian, so the front shows a hole on each side of the plate and the
+// tops/sides show holes too. phi measured from +Z (the badge side).
+const HOLE_PHI = [45, 135, 225, 315];
 
-/* REEL MATCH: the molded piece is a rounded SQUARE in section (flat faces),
- * not a round tube. Superellipse |x/r|^n + |z/r|^n = 1, faces on ±X / ±Z.
- * sef(phi) scales the round radius r out to the superellipse at angle phi. */
-const SE_N = 3.4;
-function sef(phi) {
-  const c = Math.abs(Math.cos(phi)), s = Math.abs(Math.sin(phi));
-  return 1 / Math.pow(Math.pow(c, SE_N) + Math.pow(s, SE_N), 1 / SE_N);
-}
-/* front-face height of the section at lateral offset x (semi-axis r) */
-function seFrontZ(x, r) {
-  return r * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(x) / r, SE_N)), 1 / SE_N);
-}
-/* surface point + outward normal at angle phi (x = sin, z = cos) */
-function seSurface(phi, r) {
-  const k = r * sef(phi);
-  const x = k * Math.sin(phi), z = k * Math.cos(phi);
-  const nx = Math.sign(x) * Math.pow(Math.abs(x) / r, SE_N - 1);
-  const nz = Math.sign(z) * Math.pow(Math.abs(z) / r, SE_N - 1);
-  const l = Math.hypot(nx, nz) || 1;
-  return { x, z, nx: nx / l, nz: nz / l };
-}
+/* footage features (mm → units 0.0954) */
+const PANEL_Z = 0.324;      // flattened panel the MAGZIN plate sits on
+const PANEL_Y = 0.56;       // panel half-length; sculpted shoulders beyond
+const PLATE_L = 0.98;       // raised stadium plate ~10.3 mm long
+const PLATE_W = 0.25;       // ~2.6 mm wide
+const DISH_Y = 0.69, DISH_R = 0.13, DISH_D = 0.02; // round side dishes
+const TIP_DISC_R = 0.30;    // flat dark disc set into each tip face
 
 /* Continuous silhouette radius at |y| along the stick axis. */
 function stickRadius(a) {
@@ -222,14 +210,14 @@ function bodyMaps() {
     for (let x = 0; x < TEXW; x++) {
       const u = x / TEXW;
       h[y * TEXW + x] = 0.5
-        + (n1(u, v) - 0.5) * 0.16
-        + (n2(u, v) - 0.5) * 0.12
-        + (n3(u, v) - 0.5) * 0.40
-        + (rand() - 0.5) * 0.16;
+        + (n1(u, v) - 0.5) * 0.07
+        + (n2(u, v) - 0.5) * 0.16
+        + (n3(u, v) - 0.5) * 0.36
+        + (rand() - 0.5) * 0.18;
     }
   }
   // hair-thin raised parting-line seams where the mold halves meet (u=0 wraps)
-  for (const cx of [TEXW / 4, (3 * TEXW) / 4]) {
+  for (const cx of [TEXW / 4, (3 * TEXW) / 4]) { // parting line on the sides
     for (let dx = -7; dx <= 7; dx++) {
       const x = (cx + dx + TEXW) % TEXW;
       const ridge = 0.30 * Math.exp(-(dx * dx) / (2 * 2.4 * 2.4));
@@ -253,13 +241,13 @@ function bodyMaps() {
   }
   for (let i = 0; i < h.length; i++) h[i] = clamp(h[i], 0, 1);
 
-  // roughness: satin molded PP (reel shader: 0.42, swinging 0.36 … 0.50)
+  // roughness: waxy PP mean ≈ 0.70, peaks matter more than pits
   const rcv = document.createElement('canvas');
   rcv.width = TEXW; rcv.height = TEXH;
   const rc = rcv.getContext('2d');
   const rimg = rc.createImageData(TEXW, TEXH);
   for (let i = 0; i < h.length; i++) {
-    const g = clamp(0.43 + (h[i] - 0.5) * 0.28, 0.33, 0.55) * 255;
+    const g = clamp(0.56 + (h[i] - 0.5) * 0.26, 0.4, 0.75) * 255;
     const i4 = i * 4;
     rimg.data[i4] = rimg.data[i4 + 1] = rimg.data[i4 + 2] = g;
     rimg.data[i4 + 3] = 255;
@@ -289,23 +277,17 @@ function bodyMaps() {
   }
   nc.putImageData(nimg, 0, 0);
 
-  // REEL MATCH: fine speckles molded into the resin (multiplies the body
-  // color, so the collection tint keeps working). Mostly 1–2 px flecks,
-  // a few lighter, a few darker, averaging ~0.96 so the color holds.
+  // faint light specks in the resin (visible in the black footage)
   const scv = document.createElement('canvas');
   scv.width = TEXW; scv.height = TEXH;
   const sc = scv.getContext('2d');
-  sc.fillStyle = 'rgb(246,246,246)';
+  sc.fillStyle = 'rgb(244,244,244)';
   sc.fillRect(0, 0, TEXW, TEXH);
-  const nSpk = Math.round(TEXW * TEXH * 0.0045);
+  const nSpk = Math.round(TEXW * TEXH * 0.0025);
   for (let k = 0; k < nSpk; k++) {
     const x = rand() * TEXW, y = rand() * TEXH;
-    const light = rand() < 0.62;
-    const g = light ? 255 : 196 + Math.round(rand() * 24);
-    const a = light ? 0.55 + rand() * 0.45 : 0.6 + rand() * 0.4;
-    sc.fillStyle = light ? `rgba(255,255,255,${a.toFixed(2)})` : `rgba(${g},${g},${g},${a.toFixed(2)})`;
-    const d = rand() < 0.8 ? 1.3 : 2.2;
-    sc.beginPath(); sc.arc(x, y, d / 2 + 0.2, 0, Math.PI * 2); sc.fill();
+    sc.fillStyle = `rgba(255,255,255,${(0.5 + rand() * 0.5).toFixed(2)})`;
+    sc.beginPath(); sc.arc(x, y, rand() < 0.85 ? 0.8 : 1.3, 0, Math.PI * 2); sc.fill();
   }
   const speckTex = new THREE.CanvasTexture(scv);
   speckTex.colorSpace = THREE.SRGBColorSpace;
@@ -333,24 +315,29 @@ function stadiumPath(c, x, y, w, h, r) {
   c.arc(x + r, y + r, r, Math.PI / 2, Math.PI * 1.5);
   c.closePath();
 }
-function badgeDraw(fnPerLayer) { // shared geometry: plate, groove, text
-  const W = 512, Hc = 1024;
+// badge texture covers the plate cap 1:1 (PLATE_W × PLATE_L), 2000 px/unit
+const BW = 520, BH = 2000;
+function badgeDraw(fnPerLayer) { // shared geometry: plate, letters
+  const W = BW, Hc = BH;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = Hc;
   const c = cv.getContext('2d');
   c.translate(W / 2, Hc / 2);
-  c.rotate(-Math.PI / 2); // text reads along the axis, toward the upper tip
-  const L = 900, B = 380, STROKE = 20, INSET = 55;
+  c.rotate(Math.PI / 2); // letters' tops face the piece's upper side (footage)
+  const L = Hc - 20, B = W - 20, STROKE = 0, INSET = 0;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
-  if ('letterSpacing' in c) c.letterSpacing = '14px';
-  let size = 158;
+  if ('letterSpacing' in c) c.letterSpacing = '10px';
+  // footage: wide, heavy caps filling ~80 % of the plate, ~55 % of its height
+  let size = Math.round(B * 0.6);
   const setFont = () => {
-    c.font = `700 ${size}px 'Hanken Grotesk','Helvetica Neue',Arial,sans-serif`;
+    c.font = `800 ${size}px 'Hanken Grotesk','Helvetica Neue',Arial,sans-serif`;
   };
   setFont();
-  while (size > 60 && c.measureText('MAGZIN').width > L - 190) { size -= 4; setFont(); }
-  fnPerLayer(c, { W, Hc, L, B, STROKE, INSET });
+  while (size > 60 && c.measureText('MAGZIN').width * 1.12 > L * 0.8) { size -= 4; setFont(); }
+  fnPerLayer(c, { W, Hc, L, B, STROKE, INSET, text: (fill) => {
+    c.save(); c.scale(1.12, 1); fill(); c.restore();
+  } });
   return cv;
 }
 function blurred(cv, px) {
@@ -361,28 +348,24 @@ function blurred(cv, px) {
   c.drawImage(cv, 0, 0);
   return out;
 }
-const BODY_CSS = '#26272B'; // hero finish per contract / swing-params
+const BODY_CSS = '#161618'; // hero finish per contract / swing-params
 
 function buildBadgeCanvases(plateCss = BODY_CSS) {
-  const W = 512, Hc = 1024;
-  // height: 0.5 ground → 0.60 plate → 0.30 groove + text (blur = molded slopes)
+  const W = BW, Hc = BH;
+  // height: plate 0.75 with rounded rim → letters sunk to 0.25 (blur = molded slopes)
   const hCv = blurred(badgeDraw((c, g) => {
-    c.fillStyle = '#808080';
-    c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W); // rotated frame
-    c.fillStyle = '#999999';
+    c.fillStyle = '#5a5a5a';
+    c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W);
+    c.fillStyle = '#c0c0c0';
     stadiumPath(c, -g.L / 2, -g.B / 2, g.L, g.B, g.B / 2); c.fill();
-    c.strokeStyle = '#4d4d4d'; c.lineWidth = g.STROKE;
-    stadiumPath(c, -g.L / 2 + g.INSET, -g.B / 2 + g.INSET,
-      g.L - 2 * g.INSET, g.B - 2 * g.INSET, (g.B - 2 * g.INSET) / 2);
-    c.stroke();
-    c.fillStyle = '#4d4d4d'; c.fillText('MAGZIN', 0, 8);
-  }), 2.5);
+    c.fillStyle = '#404040';
+    g.text(() => c.fillText('MAGZIN', 0, 6));
+  }), 4);
   const hd = hCv.getContext('2d').getImageData(0, 0, W, Hc).data;
   const hb = new Float32Array(W * Hc);
   for (let i = 0; i < hb.length; i++) hb[i] = hd[i * 4] / 255;
 
-  // normal from badge height (clamped both axes; features sit far from edges)
-  const S = 5.0;
+  const S = 9.0;
   const ncv = document.createElement('canvas');
   ncv.width = W; ncv.height = Hc;
   const nc = ncv.getContext('2d');
@@ -402,29 +385,21 @@ function buildBadgeCanvases(plateCss = BODY_CSS) {
   }
   nc.putImageData(nimg, 0, 0);
 
-  // color: transparent outside the plate; plate = body color; recesses get a
-  // faint occlusion darkening only (no ink — the deboss is the same plastic)
+  // color: plate = body color everywhere (cap face is the plate), letters
+  // get only cavity occlusion — same plastic, no ink
   const mapCv = blurred(badgeDraw((c, g) => {
     c.fillStyle = plateCss;
-    stadiumPath(c, -g.L / 2, -g.B / 2, g.L, g.B, g.B / 2); c.fill();
-    c.strokeStyle = 'rgba(0,0,0,0.30)'; c.lineWidth = g.STROKE + 6;
-    stadiumPath(c, -g.L / 2 + g.INSET, -g.B / 2 + g.INSET,
-      g.L - 2 * g.INSET, g.B - 2 * g.INSET, (g.B - 2 * g.INSET) / 2);
-    c.stroke();
-    c.fillStyle = 'rgba(0,0,0,0.30)'; c.fillText('MAGZIN', 0, 8);
-  }), 1);
-
-  // roughness: plate slightly smoother than the grained body, recesses waxier
-  const roughCv = blurred(badgeDraw((c, g) => {
-    c.fillStyle = '#b3b3b3';
     c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W);
-    c.fillStyle = '#a3a3a3';
-    stadiumPath(c, -g.L / 2, -g.B / 2, g.L, g.B, g.B / 2); c.fill();
-    c.strokeStyle = '#8f8f8f'; c.lineWidth = g.STROKE + 6;
-    stadiumPath(c, -g.L / 2 + g.INSET, -g.B / 2 + g.INSET,
-      g.L - 2 * g.INSET, g.B - 2 * g.INSET, (g.B - 2 * g.INSET) / 2);
-    c.stroke();
-    c.fillStyle = '#8f8f8f'; c.fillText('MAGZIN', 0, 8);
+    c.fillStyle = 'rgba(0,0,0,0.6)';
+    g.text(() => c.fillText('MAGZIN', 0, 6));
+  }), 1.5);
+
+  // roughness: plate top a touch smoother (catches the light in the footage)
+  const roughCv = blurred(badgeDraw((c, g) => {
+    c.fillStyle = '#7a7a7a';
+    c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W);
+    c.fillStyle = '#b0b0b0';
+    g.text(() => c.fillText('MAGZIN', 0, 6));
   }), 2);
 
   return { mapCv, ncv, roughCv };
@@ -488,35 +463,35 @@ function buildMaterials(light) {
   // Molded polypropylene, molded finish — not paint: zero metalness, waxy
   // low-gloss sheen broken up by the grain (normal + roughness maps).
   const bm = bodyMaps();
-  // REEL MATCH: same physical values as the reel's Blender shader —
-  // polypropylene IOR 1.49, no clear coat, faint waxy sheen, satin
-  // roughness, fine grain + speckle (not the old coarse leather peel)
+  // matte molded PP (footage): fine sandy grain, soft satin sheen, faint specks
   const body = new THREE.MeshPhysicalMaterial({
-    color: 0x26272B, metalness: 0.0, roughness: 1.0,
+    color: 0x161618, metalness: 0.0, roughness: 1.0,
     map: bm.speckTex,
-    normalMap: bm.normalTex, normalScale: new THREE.Vector2(0.5, 0.5),
+    normalMap: bm.normalTex, normalScale: new THREE.Vector2(0.45, 0.45),
     roughnessMap: bm.roughTex,
-    ior: 1.49, specularIntensity: 0.9,
-    sheen: 0.12, sheenRoughness: 0.45, sheenColor: new THREE.Color(0xffffff),
+    ior: 1.49, sheen: 0.15, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xffffff),
     envMapIntensity: 1.0,
+  });
+  // the flat disc set into each tip face: smoother, darker, catches a highlight
+  const tip = new THREE.MeshPhysicalMaterial({
+    color: 0x1a1a1c, metalness: 0.0, roughness: 0.26, ior: 1.49, envMapIntensity: 1.2,
   });
   // unlit near-black interior = the depth shadow inside a real recessed well
   const holeWall = new THREE.MeshBasicMaterial({ color: 0x0b0a09, side: THREE.BackSide });
   const holeRim = new THREE.MeshBasicMaterial({ color: 0x0b0a09, side: THREE.DoubleSide });
-  // REEL MATCH: neodymium magnet sunk deep in the well — dark, with a warm
-  // gold glint only when the well lines up with the light (#B8995E, 0.34)
+  // neodymium magnet behind each hole: bright gold in the footage
   const dot = new THREE.MeshStandardMaterial({
-    color: 0xB8995E, metalness: 1.0, roughness: 0.34,
-    envMapIntensity: light ? 0.55 : 0.5,
+    color: 0xD9B36A, metalness: 1.0, roughness: 0.3,
+    envMapIntensity: light ? 1.3 : 1.5,
   });
   const bg = badgeMaps();
   const badge = new THREE.MeshStandardMaterial({
     map: bg.map, normalMap: bg.normal, normalScale: new THREE.Vector2(1.5, 1.5),
     roughnessMap: bg.rough,
     metalness: 0.0, roughness: 1.0,
-    envMapIntensity: 1.0, transparent: true,
+    envMapIntensity: 1.0,
   });
-  return { body, magnet: body, dot, badge, holeWall, holeRim };
+  return { body, magnet: body, dot, badge, holeWall, holeRim, tip };
 }
 
 /* collection-only materials: body + badge share one tintable color; every
@@ -528,13 +503,13 @@ function buildTintMaterials(base) {
     map: bg.map, normalMap: bg.normal, normalScale: new THREE.Vector2(1.5, 1.5),
     roughnessMap: bg.rough,
     metalness: 0.0, roughness: 1.0,
-    envMapIntensity: 1.0, transparent: true,
+    envMapIntensity: 1.0,
   });
   body.color.set(0x101820);
   badge.color.set(0x101820);
   return {
     body, magnet: body, badge,
-    dot: base.dot, holeWall: base.holeWall, holeRim: base.holeRim,
+    dot: base.dot, holeWall: base.holeWall, holeRim: base.holeRim, tip: base.tip,
   };
 }
 
@@ -592,8 +567,31 @@ function displaceLathe(geo, yOff) {
       if (da > 0.068) continue;
       dip = Math.max(dip, 0.12 * (1 - smoothstep(0.038, 0.068, da)));
     }
-    const phi = Math.atan2(v3.x, v3.z);              // lathe angle, 0 = front
-    const s = Math.max(0.05, (r + d * taperTip * taperBadge - dip) * sef(phi)) / r;
+    let rr = r + d * taperTip * taperBadge - dip;
+    // flattened panel under the MAGZIN plate (front, phi≈0), blending out
+    // through the sculpted shoulders toward the collars
+    const phi = Math.atan2(v3.x, v3.z);
+    const ay = Math.abs(ys);
+    if (Math.cos(phi) > 0.2 && ay < PANEL_Y + 0.16) {
+      const flatR = PANEL_Z / Math.cos(phi);
+      if (flatR < rr) {
+        const k = 1 - smoothstep(PANEL_Y, PANEL_Y + 0.16, ay);
+        rr = rr + (flatR - rr) * k;
+      }
+    }
+    // sculpted shoulder scoop where the panel meets the collar (front half)
+    if (Math.cos(phi) > 0) {
+      rr -= 0.014 * Math.cos(phi) * gauss(ay, PANEL_Y + 0.12, 0.07);
+    }
+    // round dish on each side face near the collars (on the parting line)
+    for (const sy of [DISH_Y, -DISH_Y]) {
+      for (const sp of [Math.PI / 2, -Math.PI / 2]) {
+        let dp = phi - sp; dp = Math.atan2(Math.sin(dp), Math.cos(dp));
+        const dd = Math.hypot(dp * r, ys - sy);
+        if (dd < DISH_R) rr -= DISH_D * Math.cos((dd / DISH_R) * Math.PI / 2) ** 2;
+      }
+    }
+    const s = Math.max(0.05, rr) / r;
     pos.setX(i, v3.x * s);
     pos.setZ(i, v3.z * s);
   }
@@ -621,9 +619,9 @@ function sliceGeo(y0, y1, bore) {
   const lo = y0 + 0.001, hi = y1 - 0.001;
   const pts = [];
   if (bore === 'lo') {
-    pts.push(new THREE.Vector2(0, lo - c + 0.035));
-    pts.push(new THREE.Vector2(R_BORE, lo - c + 0.035));
-    pts.push(new THREE.Vector2(R_BORE, lo - c));
+    pts.push(new THREE.Vector2(0, lo - c + 0.006));
+    pts.push(new THREE.Vector2(TIP_DISC_R, lo - c + 0.006));
+    pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, lo - c));
   } else {
     pts.push(new THREE.Vector2(0, lo - c));
   }
@@ -633,9 +631,9 @@ function sliceGeo(y0, y1, bore) {
     pts.push(new THREE.Vector2(stickRadius(Math.abs(y)), y - c));
   }
   if (bore === 'hi') {
-    pts.push(new THREE.Vector2(R_BORE, hi - c));
-    pts.push(new THREE.Vector2(R_BORE, hi - c - 0.035));
-    pts.push(new THREE.Vector2(0, hi - c - 0.035));
+    pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, hi - c));
+    pts.push(new THREE.Vector2(TIP_DISC_R, hi - c - 0.006));
+    pts.push(new THREE.Vector2(0, hi - c - 0.006));
   } else {
     pts.push(new THREE.Vector2(0, hi - c));
   }
@@ -649,17 +647,17 @@ function sliceGeo(y0, y1, bore) {
  * piece (the real product is one molded part; only anatomy needs slices) */
 function onePieceGeo() {
   const pts = [];
-  pts.push(new THREE.Vector2(0, -H + 0.035));
-  pts.push(new THREE.Vector2(R_BORE, -H + 0.035));
-  pts.push(new THREE.Vector2(R_BORE, -H));
+  pts.push(new THREE.Vector2(0, -H + 0.006));
+  pts.push(new THREE.Vector2(TIP_DISC_R, -H + 0.006));
+  pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, -H));
   const N = Math.round(STICK_LEN / 0.014); // 250 — latheV() depends on this
   for (let i = 0; i <= N; i++) {
     const y = -H + STICK_LEN * (i / N);
     pts.push(new THREE.Vector2(stickRadius(Math.abs(y)), y));
   }
-  pts.push(new THREE.Vector2(R_BORE, H));
-  pts.push(new THREE.Vector2(R_BORE, H - 0.035));
-  pts.push(new THREE.Vector2(0, H - 0.035));
+  pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, H));
+  pts.push(new THREE.Vector2(TIP_DISC_R, H - 0.006));
+  pts.push(new THREE.Vector2(0, H - 0.006));
   const geo = new THREE.LatheGeometry(pts, RADIAL);
   displaceLathe(geo, 0);
   return geo;
@@ -704,17 +702,17 @@ function wellMatrices(gyList, yOff) {
   const rims = [], walls = [], brass = [];
   for (const gy of gyList) {
     for (const phi of HOLE_PHI) {
-      // REEL MATCH: wells sit on the flat front/back faces, drilled along the
-      // face normal (not radially), and the magnet sits deeper in the well
-      const sp = seSurface(phi * DEG, stickRadius(Math.abs(gy)));
-      const dir = new THREE.Vector3(sp.nx, 0, sp.nz);
+      const th = (90 - phi) * DEG;
+      const dir = new THREE.Vector3(Math.cos(th), 0, Math.sin(th));
       const qF = new THREE.Quaternion().setFromUnitVectors(FWD, dir);
       const qU = new THREE.Quaternion().setFromUnitVectors(UP, dir);
-      const at = (q, depth) => new THREE.Matrix4().compose(
-        new THREE.Vector3(sp.x + dir.x * depth, gy - yOff, sp.z + dir.z * depth), q, one);
-      rims.push(at(qF, 0.012));
-      walls.push(at(qU, 0.012 - 0.048)); // wall spans surf+0.014 … surf−0.086
-      brass.push(at(qF, 0.012 - 0.082));
+      // +headroom over the curved, undulating surface so the rim clears it
+      const surf = stickRadius(Math.abs(gy)) + 0.016;
+      const at = (q, radial) => new THREE.Matrix4().compose(
+        new THREE.Vector3(dir.x * radial, gy - yOff, dir.z * radial), q, one);
+      rims.push(at(qF, surf));
+      walls.push(at(qU, surf - 0.048)); // wall spans surf+0.002 … surf−0.098
+      brass.push(at(qF, surf - 0.05));
     }
   }
   return { rims, walls, brass };
@@ -724,9 +722,9 @@ const GEO = {};
 function getGeo() {
   if (!GEO.onePiece) {
     // well stack templates
-    GEO.wellRim = new THREE.RingGeometry(0.058, 0.082, 32);
+    GEO.wellRim = new THREE.RingGeometry(0.06, 0.07, 32);
     GEO.wellWall = new THREE.CylinderGeometry(0.064, 0.058, 0.10, 24, 1, true);
-    GEO.wellBrass = new THREE.CircleGeometry(0.046, 24);
+    GEO.wellBrass = new THREE.CircleGeometry(0.034, 24); // magnet face: a bright spot inside a dark hole
     const wellSet = (gyList, yOff) => {
       const m = wellMatrices(gyList, yOff);
       return {
@@ -760,16 +758,31 @@ function getGeo() {
     };
 
     // debossed stadium MAGZIN plate: slim curved strip riding the middle band
-    // REEL MATCH: the MAGZIN oval rides the FLAT front panel of the waist —
-    // a strip bent to the superellipse front face, a hair proud of it
-    GEO.badge = new THREE.PlaneGeometry(0.32, 0.62, 48, 1);
+    // raised stadium plate, a real solid with a rounded top edge, sitting on
+    // the flat panel (base sunk into it so no gap shows at its sides)
     {
-      const bp = GEO.badge.attributes.position;
-      for (let i = 0; i < bp.count; i++) {
-        bp.setZ(i, seFrontZ(bp.getX(i), R_MID) + 0.008);
+      const w = PLATE_W / 2, l = PLATE_L / 2, rr = w;
+      const sh = new THREE.Shape();
+      sh.moveTo(-w, -l + rr);
+      sh.lineTo(-w, l - rr);
+      sh.absarc(0, l - rr, rr, Math.PI, 0, true);
+      sh.lineTo(w, -l + rr);
+      sh.absarc(0, -l + rr, rr, 0, Math.PI, true);
+      const depth = 0.03;
+      const geo = new THREE.ExtrudeGeometry(sh, {
+        depth, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006,
+        bevelSegments: 3, curveSegments: 24,
+      });
+      // cap UVs: map the plate footprint 1:1 onto the badge texture
+      const uv = geo.attributes.uv, pos = geo.attributes.position;
+      for (let i = 0; i < uv.count; i++) {
+        uv.setXY(i, pos.getX(i) / (PLATE_W + 0.012) + 0.5, pos.getY(i) / (PLATE_L + 0.012) + 0.5);
       }
-      GEO.badge.computeVertexNormals();
+      geo.translate(0, 0, PANEL_Z - 0.01);
+      geo.computeVertexNormals();
+      GEO.badge = geo;
     }
+    GEO.tipDisc = new THREE.CircleGeometry(TIP_DISC_R + 0.004, 48);
     GEO.flash = new THREE.RingGeometry(0.4, 0.5, 48);
   }
   return GEO;
@@ -783,6 +796,21 @@ function addWellSet(parent, set, mats) {
   );
 }
 
+/* flat glossier disc in each tip face (footage) */
+function addTipDiscs(parent, mats, yTop, yBot) {
+  const g = getGeo();
+  if (yTop !== null) {
+    const d = new THREE.Mesh(g.tipDisc, mats.tip || mats.body);
+    d.rotation.x = -Math.PI / 2; d.position.y = yTop - 0.004;
+    parent.add(d);
+  }
+  if (yBot !== null) {
+    const d = new THREE.Mesh(g.tipDisc, mats.tip || mats.body);
+    d.rotation.x = Math.PI / 2; d.position.y = yBot + 0.004;
+    parent.add(d);
+  }
+}
+
 /* seamless one-piece rod — what every chain scene shows */
 function createSeamlessStick(mats, withBadge = true) {
   const g = getGeo();
@@ -790,7 +818,8 @@ function createSeamlessStick(mats, withBadge = true) {
   stick.name = 'MagzinStick';
   stick.add(new THREE.Mesh(g.onePiece, mats.body));
   addWellSet(stick, g.chainWells, mats);
-  if (withBadge) stick.add(new THREE.Mesh(g.badge, mats.badge));
+  if (withBadge) stick.add(new THREE.Mesh(g.badge, [mats.badge, mats.body]));
+  addTipDiscs(stick, mats, H, -H);
   return stick;
 }
 
@@ -818,8 +847,10 @@ export function createMagzinStick(mats, withBadge = true) {
     grp.userData.baseY = y;
     grp.add(new THREE.Mesh(g.slices[name], mats.body));
     if (g.sliceWells[name]) addWellSet(grp, g.sliceWells[name], mats);
+    if (name === 'UpperMagnet') addTipDiscs(grp, mats, H - y, null);
+    if (name === 'LowerMagnet') addTipDiscs(grp, mats, null, -H - y);
     if (name === 'MiddleBody' && withBadge) {
-      grp.add(new THREE.Mesh(g.badge, mats.badge));
+      grp.add(new THREE.Mesh(g.badge, [mats.badge, mats.body]));
     }
     stick.add(grp);
     segments[name] = grp;
@@ -853,9 +884,7 @@ function makeRenderer(canvas, exposure) {
   const renderer = new THREE.WebGLRenderer({
     canvas, antialias: true, alpha: false, powerPreference: 'high-performance',
   });
-  // REEL MATCH: the reel was graded through Blender AgX; ACES crushed the
-  // black PP and hid the molded form
-  renderer.toneMapping = THREE.AgXToneMapping;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = exposure;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   return renderer;
@@ -912,7 +941,7 @@ function buildHero(darkEnv, mats) {
 
   const key = new THREE.DirectionalLight(0xffffff, 2.0);
   key.position.set(-5, 7, 4);
-  const rim = new THREE.DirectionalLight(0xffebd1, 1.1);
+  const rim = new THREE.DirectionalLight(0xffffff, 1.1);
   rim.position.set(4, 1.5, -5);
   // soft fill so matte PP reveals its form instead of falling flat
   const hemi = new THREE.HemisphereLight(0xfff7ec, 0x35322c, 0.35);
@@ -986,7 +1015,7 @@ function buildPull(darkEnv, mats) {
 
   const key = new THREE.DirectionalLight(0xffffff, 1.8);
   key.position.set(-6, 8, 6);
-  const rim = new THREE.DirectionalLight(0xffebd1, 0.9);
+  const rim = new THREE.DirectionalLight(0xffffff, 0.9);
   rim.position.set(5, -2, -6);
   const hemi = new THREE.HemisphereLight(0xfff7ec, 0x35322c, 0.3);
   scene.add(key, rim, hemi);
@@ -1234,7 +1263,7 @@ function buildBeats(darkEnv, mats) {
 
   const key = new THREE.DirectionalLight(0xffffff, 1.9);
   key.position.set(-5, 7, 5);
-  const rim = new THREE.DirectionalLight(0xffebd1, 0.9);
+  const rim = new THREE.DirectionalLight(0xffffff, 0.9);
   rim.position.set(4, 0, -5);
   const hemi = new THREE.HemisphereLight(0xfff7ec, 0x35322c, 0.3);
   scene.add(key, rim, hemi);
@@ -1618,3 +1647,6 @@ export {
   buildEnvTexture, buildMaterials, createSeamlessStick, createChain,
   chainHalf, makeRenderer, STICK_LEN, STICK_STEP, R_CAP,
 };
+
+/* test hook: lets a bench page build the exact same piece (no side effects) */
+export const __p3d = { buildMaterials, buildEnvTexture, createSeamlessStick, createChain };
