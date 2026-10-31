@@ -133,7 +133,31 @@ const R_TIP = R_FACE;          // beats hinge contact tangent
 /* magnet wells: two circumferential rows at ±28° off the meridian, front and
  * back, at ~15.5 mm (cap) and ~10.5 mm (collar) from the piece center */
 const HOLE_ROWS = [1.474, 0.997, -0.997, -1.474];
-const HOLE_PHI = [62, 118, 242, 298]; // texture phi = 90° − θ, for θ = ±28°
+// REEL MATCH (2026-10-31): wells sit on the FRONT and BACK faces in pairs,
+// ±26° either side of the badge meridian (phi measured from +Z, the front)
+const HOLE_PHI = [26, 154, 206, 334];
+
+/* REEL MATCH: the molded piece is a rounded SQUARE in section (flat faces),
+ * not a round tube. Superellipse |x/r|^n + |z/r|^n = 1, faces on ±X / ±Z.
+ * sef(phi) scales the round radius r out to the superellipse at angle phi. */
+const SE_N = 3.4;
+function sef(phi) {
+  const c = Math.abs(Math.cos(phi)), s = Math.abs(Math.sin(phi));
+  return 1 / Math.pow(Math.pow(c, SE_N) + Math.pow(s, SE_N), 1 / SE_N);
+}
+/* front-face height of the section at lateral offset x (semi-axis r) */
+function seFrontZ(x, r) {
+  return r * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(x) / r, SE_N)), 1 / SE_N);
+}
+/* surface point + outward normal at angle phi (x = sin, z = cos) */
+function seSurface(phi, r) {
+  const k = r * sef(phi);
+  const x = k * Math.sin(phi), z = k * Math.cos(phi);
+  const nx = Math.sign(x) * Math.pow(Math.abs(x) / r, SE_N - 1);
+  const nz = Math.sign(z) * Math.pow(Math.abs(z) / r, SE_N - 1);
+  const l = Math.hypot(nx, nz) || 1;
+  return { x, z, nx: nx / l, nz: nz / l };
+}
 
 /* Continuous silhouette radius at |y| along the stick axis. */
 function stickRadius(a) {
@@ -198,14 +222,14 @@ function bodyMaps() {
     for (let x = 0; x < TEXW; x++) {
       const u = x / TEXW;
       h[y * TEXW + x] = 0.5
-        + (n1(u, v) - 0.5) * 0.30
-        + (n2(u, v) - 0.5) * 0.46
-        + (n3(u, v) - 0.5) * 0.22
-        + (rand() - 0.5) * 0.08;
+        + (n1(u, v) - 0.5) * 0.16
+        + (n2(u, v) - 0.5) * 0.12
+        + (n3(u, v) - 0.5) * 0.40
+        + (rand() - 0.5) * 0.16;
     }
   }
   // hair-thin raised parting-line seams where the mold halves meet (u=0 wraps)
-  for (const cx of [0, TEXW / 2]) {
+  for (const cx of [TEXW / 4, (3 * TEXW) / 4]) {
     for (let dx = -7; dx <= 7; dx++) {
       const x = (cx + dx + TEXW) % TEXW;
       const ridge = 0.30 * Math.exp(-(dx * dx) / (2 * 2.4 * 2.4));
@@ -229,13 +253,13 @@ function bodyMaps() {
   }
   for (let i = 0; i < h.length; i++) h[i] = clamp(h[i], 0, 1);
 
-  // roughness: waxy PP mean ≈ 0.70, peaks matter more than pits
+  // roughness: satin molded PP (reel shader: 0.42, swinging 0.36 … 0.50)
   const rcv = document.createElement('canvas');
   rcv.width = TEXW; rcv.height = TEXH;
   const rc = rcv.getContext('2d');
   const rimg = rc.createImageData(TEXW, TEXH);
   for (let i = 0; i < h.length; i++) {
-    const g = clamp(0.70 + (h[i] - 0.5) * 0.30, 0.3, 1) * 255;
+    const g = clamp(0.43 + (h[i] - 0.5) * 0.28, 0.33, 0.55) * 255;
     const i4 = i * 4;
     rimg.data[i4] = rimg.data[i4 + 1] = rimg.data[i4 + 2] = g;
     rimg.data[i4 + 3] = 255;
@@ -265,13 +289,34 @@ function bodyMaps() {
   }
   nc.putImageData(nimg, 0, 0);
 
+  // REEL MATCH: fine speckles molded into the resin (multiplies the body
+  // color, so the collection tint keeps working). Mostly 1–2 px flecks,
+  // a few lighter, a few darker, averaging ~0.96 so the color holds.
+  const scv = document.createElement('canvas');
+  scv.width = TEXW; scv.height = TEXH;
+  const sc = scv.getContext('2d');
+  sc.fillStyle = 'rgb(246,246,246)';
+  sc.fillRect(0, 0, TEXW, TEXH);
+  const nSpk = Math.round(TEXW * TEXH * 0.0045);
+  for (let k = 0; k < nSpk; k++) {
+    const x = rand() * TEXW, y = rand() * TEXH;
+    const light = rand() < 0.62;
+    const g = light ? 255 : 196 + Math.round(rand() * 24);
+    const a = light ? 0.55 + rand() * 0.45 : 0.6 + rand() * 0.4;
+    sc.fillStyle = light ? `rgba(255,255,255,${a.toFixed(2)})` : `rgba(${g},${g},${g},${a.toFixed(2)})`;
+    const d = rand() < 0.8 ? 1.3 : 2.2;
+    sc.beginPath(); sc.arc(x, y, d / 2 + 0.2, 0, Math.PI * 2); sc.fill();
+  }
+  const speckTex = new THREE.CanvasTexture(scv);
+  speckTex.colorSpace = THREE.SRGBColorSpace;
+
   const normalTex = new THREE.CanvasTexture(ncv);
   const roughTex = new THREE.CanvasTexture(rcv);
-  for (const t of [normalTex, roughTex]) {
+  for (const t of [normalTex, roughTex, speckTex]) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.anisotropy = 8;
   }
-  BODY_MAPS = { normalTex, roughTex };
+  BODY_MAPS = { normalTex, roughTex, speckTex };
   return BODY_MAPS;
 }
 
@@ -443,20 +488,26 @@ function buildMaterials(light) {
   // Molded polypropylene, molded finish — not paint: zero metalness, waxy
   // low-gloss sheen broken up by the grain (normal + roughness maps).
   const bm = bodyMaps();
-  const body = new THREE.MeshStandardMaterial({
+  // REEL MATCH: same physical values as the reel's Blender shader —
+  // polypropylene IOR 1.49, no clear coat, faint waxy sheen, satin
+  // roughness, fine grain + speckle (not the old coarse leather peel)
+  const body = new THREE.MeshPhysicalMaterial({
     color: 0x26272B, metalness: 0.0, roughness: 1.0,
-    normalMap: bm.normalTex, normalScale: new THREE.Vector2(1.15, 1.15),
+    map: bm.speckTex,
+    normalMap: bm.normalTex, normalScale: new THREE.Vector2(0.5, 0.5),
     roughnessMap: bm.roughTex,
+    ior: 1.49, specularIntensity: 0.9,
+    sheen: 0.12, sheenRoughness: 0.45, sheenColor: new THREE.Color(0xffffff),
     envMapIntensity: 1.0,
   });
   // unlit near-black interior = the depth shadow inside a real recessed well
   const holeWall = new THREE.MeshBasicMaterial({ color: 0x0b0a09, side: THREE.BackSide });
   const holeRim = new THREE.MeshBasicMaterial({ color: 0x0b0a09, side: THREE.DoubleSide });
-  // neodymium magnet (nickel-plated, silver) sunk in shadow — bright cool
-  // metal, glints only when the well lines up with the light
+  // REEL MATCH: neodymium magnet sunk deep in the well — dark, with a warm
+  // gold glint only when the well lines up with the light (#B8995E, 0.34)
   const dot = new THREE.MeshStandardMaterial({
-    color: 0xC9CBCE, metalness: 1.0, roughness: 0.42,
-    envMapIntensity: light ? 1.0 : 1.1,
+    color: 0xB8995E, metalness: 1.0, roughness: 0.34,
+    envMapIntensity: light ? 0.55 : 0.5,
   });
   const bg = badgeMaps();
   const badge = new THREE.MeshStandardMaterial({
@@ -541,7 +592,8 @@ function displaceLathe(geo, yOff) {
       if (da > 0.068) continue;
       dip = Math.max(dip, 0.12 * (1 - smoothstep(0.038, 0.068, da)));
     }
-    const s = Math.max(0.05, r + d * taperTip * taperBadge - dip) / r;
+    const phi = Math.atan2(v3.x, v3.z);              // lathe angle, 0 = front
+    const s = Math.max(0.05, (r + d * taperTip * taperBadge - dip) * sef(phi)) / r;
     pos.setX(i, v3.x * s);
     pos.setZ(i, v3.z * s);
   }
@@ -652,17 +704,17 @@ function wellMatrices(gyList, yOff) {
   const rims = [], walls = [], brass = [];
   for (const gy of gyList) {
     for (const phi of HOLE_PHI) {
-      const th = (90 - phi) * DEG;
-      const dir = new THREE.Vector3(Math.cos(th), 0, Math.sin(th));
+      // REEL MATCH: wells sit on the flat front/back faces, drilled along the
+      // face normal (not radially), and the magnet sits deeper in the well
+      const sp = seSurface(phi * DEG, stickRadius(Math.abs(gy)));
+      const dir = new THREE.Vector3(sp.nx, 0, sp.nz);
       const qF = new THREE.Quaternion().setFromUnitVectors(FWD, dir);
       const qU = new THREE.Quaternion().setFromUnitVectors(UP, dir);
-      // +headroom over the curved, undulating surface so the rim clears it
-      const surf = stickRadius(Math.abs(gy)) + 0.016;
-      const at = (q, radial) => new THREE.Matrix4().compose(
-        new THREE.Vector3(dir.x * radial, gy - yOff, dir.z * radial), q, one);
-      rims.push(at(qF, surf));
-      walls.push(at(qU, surf - 0.048)); // wall spans surf+0.002 … surf−0.098
-      brass.push(at(qF, surf - 0.055));
+      const at = (q, depth) => new THREE.Matrix4().compose(
+        new THREE.Vector3(sp.x + dir.x * depth, gy - yOff, sp.z + dir.z * depth), q, one);
+      rims.push(at(qF, 0.012));
+      walls.push(at(qU, 0.012 - 0.048)); // wall spans surf+0.014 … surf−0.086
+      brass.push(at(qF, 0.012 - 0.082));
     }
   }
   return { rims, walls, brass };
@@ -708,8 +760,16 @@ function getGeo() {
     };
 
     // debossed stadium MAGZIN plate: slim curved strip riding the middle band
-    GEO.badge = new THREE.CylinderGeometry(
-      R_MID + 0.012, R_MID + 0.012, 0.62, 48, 1, true, -0.48, 0.96);
+    // REEL MATCH: the MAGZIN oval rides the FLAT front panel of the waist —
+    // a strip bent to the superellipse front face, a hair proud of it
+    GEO.badge = new THREE.PlaneGeometry(0.32, 0.62, 48, 1);
+    {
+      const bp = GEO.badge.attributes.position;
+      for (let i = 0; i < bp.count; i++) {
+        bp.setZ(i, seFrontZ(bp.getX(i), R_MID) + 0.008);
+      }
+      GEO.badge.computeVertexNormals();
+    }
     GEO.flash = new THREE.RingGeometry(0.4, 0.5, 48);
   }
   return GEO;
@@ -793,7 +853,9 @@ function makeRenderer(canvas, exposure) {
   const renderer = new THREE.WebGLRenderer({
     canvas, antialias: true, alpha: false, powerPreference: 'high-performance',
   });
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  // REEL MATCH: the reel was graded through Blender AgX; ACES crushed the
+  // black PP and hid the molded form
+  renderer.toneMapping = THREE.AgXToneMapping;
   renderer.toneMappingExposure = exposure;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   return renderer;
@@ -850,7 +912,7 @@ function buildHero(darkEnv, mats) {
 
   const key = new THREE.DirectionalLight(0xffffff, 2.0);
   key.position.set(-5, 7, 4);
-  const rim = new THREE.DirectionalLight(0xffffff, 1.1);
+  const rim = new THREE.DirectionalLight(0xffebd1, 1.1);
   rim.position.set(4, 1.5, -5);
   // soft fill so matte PP reveals its form instead of falling flat
   const hemi = new THREE.HemisphereLight(0xfff7ec, 0x35322c, 0.35);
@@ -924,7 +986,7 @@ function buildPull(darkEnv, mats) {
 
   const key = new THREE.DirectionalLight(0xffffff, 1.8);
   key.position.set(-6, 8, 6);
-  const rim = new THREE.DirectionalLight(0xffffff, 0.9);
+  const rim = new THREE.DirectionalLight(0xffebd1, 0.9);
   rim.position.set(5, -2, -6);
   const hemi = new THREE.HemisphereLight(0xfff7ec, 0x35322c, 0.3);
   scene.add(key, rim, hemi);
@@ -1172,7 +1234,7 @@ function buildBeats(darkEnv, mats) {
 
   const key = new THREE.DirectionalLight(0xffffff, 1.9);
   key.position.set(-5, 7, 5);
-  const rim = new THREE.DirectionalLight(0xffffff, 0.9);
+  const rim = new THREE.DirectionalLight(0xffebd1, 0.9);
   rim.position.set(4, 0, -5);
   const hemi = new THREE.HemisphereLight(0xfff7ec, 0x35322c, 0.3);
   scene.add(key, rim, hemi);
