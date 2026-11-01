@@ -8,6 +8,15 @@
  *  - ANATOMY: DOM labels get a paper pill background (legibility fix).
  * Three.js r164, vendored. No other dependencies.
  *
+ * FACTORY CAD (2026-11-01): every chain piece is now the real molded part —
+ * the NX STEP file 04-23-5 (36.75 × 7.78 mm, 16 holes, MAGZIN deboss on the
+ * front, infinity mark on the back), tessellated with OpenCascade and packed
+ * into assets/model/magzin-stick.bin with baked ambient occlusion. A gold
+ * neodymium disc sits at the bottom of each measured hole. Material and
+ * grade follow the promo reel's Blender shader (molded PP, IOR 1.49, satin
+ * roughness ~0.42, faint sheen, fine grain + speckle, AgX). The hand-built
+ * lathe below now only serves the (currently unused) anatomy section.
+ *
  * Material truth (Motion/"MAGZIN product (matches CAD).png", user-confirmed):
  * molded polypropylene body — molded finish with coarse orange-peel grain,
  * NOT paint, NOT machined metal; recessed neodymium magnets (nickel-plated,
@@ -72,11 +81,11 @@ function buildEnvTexture(mode) {
       if (mode === 'dark') {
         e = 0.008 + 0.02 * smoothstep(0.15, 0.95, v);
         // key softbox — widened so molded plastic gets one broad soft highlight
-        e += 4.6 * gauss(u, 0.115, 0.05) * smoothstep(0.22, 0.48, v) * smoothstep(0.99, 0.84, v);
+        e += 6.0 * gauss(u, 0.115, 0.07) * smoothstep(0.22, 0.48, v) * smoothstep(0.99, 0.84, v);
         // soft overhead sheen
         e += 0.5 * smoothstep(0.8, 0.96, v);
         // thin rim column on the opposite side
-        e += 2.4 * gauss(u, 0.615, 0.014) * smoothstep(0.2, 0.42, v) * smoothstep(0.97, 0.8, v);
+        e += 4.0 * gauss(u, 0.615, 0.02) * smoothstep(0.2, 0.42, v) * smoothstep(0.97, 0.8, v);
         // broad dim fill between them so matte black doesn't fall to a void
         e += 0.16 * gauss(u, 0.38, 0.12) * smoothstep(0.2, 0.5, v) * smoothstep(0.98, 0.7, v);
         // faint floor bounce
@@ -121,31 +130,77 @@ const H = STICK_LEN / 2;                       // 1.75
 const R_CAP = 0.386;           // Ø8.1 end block
 const R_FACE = 0.339;          // Ø7.1 flat tip face
 const R_BORE = 0.143;          // Ø3.0 center bore
-const R_COLLAR = 0.364;        // collar just past the cap step (footage: clear step)
-const R_MID = 0.352;           // round waist ~Ø7.4; the CAD's Ø6.8 is measured
-                               // across the flat MAGZIN panel (PANEL_Z below)
+const R_COLLAR = 0.375;        // Ø7.85 collar
+const R_MID = 0.324;           // Ø6.8 middle body
 const A_CAP = 1.192;           // cap block spans 12.5 … 18.35 mm
 const A_CHAMFER = 1.655;       // ~1 mm rounded tip edge
 const A_NECK = 0.811;          // collar spans 8.5 … 12.5 mm
-const A_BLEND = 0.42;          // long, gentle collar → waist blend (footage)
+const A_BLEND = 0.668;         // collar → middle blend ends at 7.0 mm
 const A_PLATE = 0.44;          // badge band half-length (anatomy slice)
 const R_TIP = R_FACE;          // beats hinge contact tangent
 
 /* magnet wells: two circumferential rows at ±28° off the meridian, front and
  * back, at ~15.5 mm (cap) and ~10.5 mm (collar) from the piece center */
 const HOLE_ROWS = [1.474, 0.997, -0.997, -1.474];
-// PRODUCT TRUTH (flip-reference.mp4): four holes around each row, 45° off the
-// badge meridian, so the front shows a hole on each side of the plate and the
-// tops/sides show holes too. phi measured from +Z (the badge side).
-const HOLE_PHI = [45, 135, 225, 315];
+const HOLE_PHI = [62, 118, 242, 298]; // texture phi = 90° − θ, for θ = ±28°
 
-/* footage features (mm → units 0.0954) */
-const PANEL_Z = 0.324;      // flattened panel the MAGZIN plate sits on
-const PANEL_Y = 0.56;       // panel half-length; sculpted shoulders beyond
-const PLATE_L = 0.98;       // raised stadium plate ~10.3 mm long
-const PLATE_W = 0.25;       // ~2.6 mm wide
-const DISH_Y = 0.69, DISH_R = 0.13, DISH_D = 0.02; // round side dishes
-const TIP_DISC_R = 0.30;    // flat dark disc set into each tip face
+/* ------------------------------------------------- factory CAD piece
+ * Binary layout: u32 header length, JSON header, then int16 xyz positions
+ * (per-axis scale ps), int8 xyz normal + int8 AO (0..127), uint16 uv,
+ * uint32 indices. Site frame: axis +Y, MAGZIN face +Z, 3.5 units long. */
+const CAD_HALF = 0.3705;       // half the 7.78 mm section — fold row pitch
+let CAD = null;
+async function loadCad() {
+  const url = new URL('../assets/model/magzin-stick.bin?v=cad1', import.meta.url);
+  const buf = await (await fetch(url)).arrayBuffer();
+  const hl = new DataView(buf).getUint32(0, true);
+  const hdr = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
+  let o = 4 + hl;
+  const nV = hdr.v, nI = hdr.i;
+  const qp = new Int16Array(buf, o, nV * 3); o += nV * 6; o += o % 4; // padding
+  const qn = new Int8Array(buf, o, nV * 4); o += nV * 4;
+  const qu = new Uint16Array(buf, o, nV * 2); o += nV * 4;
+  const idx = new Uint32Array(buf, o, nI);
+  const pos = new Float32Array(nV * 3), nor = new Float32Array(nV * 3);
+  const uv = new Float32Array(nV * 2), col = new Float32Array(nV * 3);
+  for (let i = 0; i < nV; i++) {
+    for (let a = 0; a < 3; a++) {
+      pos[i * 3 + a] = qp[i * 3 + a] * hdr.ps[a];
+      nor[i * 3 + a] = qn[i * 4 + a] / 127;
+    }
+    // baked AO → vertex color; a soft curve keeps open faces at full
+    // brightness and lets holes, letters and chamfer seams fall dark
+    const ao = Math.max(0, qn[i * 4 + 3]) / 127;
+    const c = 0.06 + 0.94 * Math.pow(ao, 1.35);
+    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = c;
+    uv[i * 2] = (qu[i * 2] / 65535) * 2;
+    uv[i * 2 + 1] = qu[i * 2 + 1] / 65535;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeBoundingSphere();
+
+  // neodymium discs at the bottom of each measured hole
+  const disc = new THREE.CylinderGeometry(1, 1, 0.006, 32);
+  const mats4 = hdr.mags.map((m) => {
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), m.nz > 0 ? Math.PI / 2 : -Math.PI / 2);
+    return new THREE.Matrix4().compose(new THREE.Vector3(m.x, m.y, m.z), q, new THREE.Vector3(m.r, 1, m.r));
+  });
+  const mags = mergeTransformed(disc, mats4);
+  // the end magnet's flat dark cover closes each tip bore, flush with the face
+  const capG = new THREE.CircleGeometry(hdr.bore.r, 48);
+  const capM = [1, -1].map((sg) => new THREE.Matrix4().compose(
+    new THREE.Vector3(0, sg * (hdr.bore.y + 0.0015), 0),
+    new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -sg * Math.PI / 2),
+    new THREE.Vector3(1, 1, 1)));
+  const caps = mergeTransformed(capG, capM);
+  CAD = { geo, mags, caps };
+  return CAD;
+}
 
 /* Continuous silhouette radius at |y| along the stick axis. */
 function stickRadius(a) {
@@ -210,14 +265,14 @@ function bodyMaps() {
     for (let x = 0; x < TEXW; x++) {
       const u = x / TEXW;
       h[y * TEXW + x] = 0.5
-        + (n1(u, v) - 0.5) * 0.07
-        + (n2(u, v) - 0.5) * 0.16
-        + (n3(u, v) - 0.5) * 0.36
-        + (rand() - 0.5) * 0.18;
+        + (n1(u, v) - 0.5) * 0.03
+        + (n2(u, v) - 0.5) * 0.05
+        + (n3(u, v) - 0.5) * 0.22
+        + (rand() - 0.5) * 0.30;
     }
   }
-  // hair-thin raised parting-line seams where the mold halves meet (u=0 wraps)
-  for (const cx of [TEXW / 4, (3 * TEXW) / 4]) { // parting line on the sides
+  // (CAD carries its own parting geometry — keep the texture seams off)
+  for (const cx of []) {
     for (let dx = -7; dx <= 7; dx++) {
       const x = (cx + dx + TEXW) % TEXW;
       const ridge = 0.30 * Math.exp(-(dx * dx) / (2 * 2.4 * 2.4));
@@ -225,7 +280,7 @@ function bodyMaps() {
     }
   }
   // shallow sink-mark dips around each magnet well
-  for (const gy of HOLE_ROWS) {
+  for (const gy of []) {
     for (const phi of HOLE_PHI) {
       const cx = (phi / 360) * TEXW, cy = canvasY(gy), rad = 66;
       for (let dy = -rad; dy <= rad; dy++) {
@@ -247,7 +302,7 @@ function bodyMaps() {
   const rc = rcv.getContext('2d');
   const rimg = rc.createImageData(TEXW, TEXH);
   for (let i = 0; i < h.length; i++) {
-    const g = clamp(0.56 + (h[i] - 0.5) * 0.26, 0.4, 0.75) * 255;
+    const g = clamp(0.43 + (h[i] - 0.5) * 0.30, 0.34, 0.56) * 255; // reel: 0.42, 0.36…0.50
     const i4 = i * 4;
     rimg.data[i4] = rimg.data[i4 + 1] = rimg.data[i4 + 2] = g;
     rimg.data[i4 + 3] = 255;
@@ -277,17 +332,19 @@ function bodyMaps() {
   }
   nc.putImageData(nimg, 0, 0);
 
-  // faint light specks in the resin (visible in the black footage)
+  // small light specks molded into the resin (reel / product photos);
+  // multiplies the body color so collection tints keep them
   const scv = document.createElement('canvas');
   scv.width = TEXW; scv.height = TEXH;
   const sc = scv.getContext('2d');
-  sc.fillStyle = 'rgb(244,244,244)';
+  sc.fillStyle = 'rgb(240,240,240)';
   sc.fillRect(0, 0, TEXW, TEXH);
-  const nSpk = Math.round(TEXW * TEXH * 0.0025);
+  const nSpk = Math.round(TEXW * TEXH * 0.003);
   for (let k = 0; k < nSpk; k++) {
-    const x = rand() * TEXW, y = rand() * TEXH;
     sc.fillStyle = `rgba(255,255,255,${(0.5 + rand() * 0.5).toFixed(2)})`;
-    sc.beginPath(); sc.arc(x, y, rand() < 0.85 ? 0.8 : 1.3, 0, Math.PI * 2); sc.fill();
+    sc.beginPath();
+    sc.arc(rand() * TEXW, rand() * TEXH, rand() < 0.8 ? 0.9 : 1.5, 0, Math.PI * 2);
+    sc.fill();
   }
   const speckTex = new THREE.CanvasTexture(scv);
   speckTex.colorSpace = THREE.SRGBColorSpace;
@@ -315,29 +372,24 @@ function stadiumPath(c, x, y, w, h, r) {
   c.arc(x + r, y + r, r, Math.PI / 2, Math.PI * 1.5);
   c.closePath();
 }
-// badge texture covers the plate cap 1:1 (PLATE_W × PLATE_L), 2000 px/unit
-const BW = 520, BH = 2000;
-function badgeDraw(fnPerLayer) { // shared geometry: plate, letters
-  const W = BW, Hc = BH;
+function badgeDraw(fnPerLayer) { // shared geometry: plate, groove, text
+  const W = 512, Hc = 1024;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = Hc;
   const c = cv.getContext('2d');
   c.translate(W / 2, Hc / 2);
-  c.rotate(Math.PI / 2); // letters' tops face the piece's upper side (footage)
-  const L = Hc - 20, B = W - 20, STROKE = 0, INSET = 0;
+  c.rotate(-Math.PI / 2); // text reads along the axis, toward the upper tip
+  const L = 900, B = 380, STROKE = 20, INSET = 55;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
-  if ('letterSpacing' in c) c.letterSpacing = '10px';
-  // footage: wide, heavy caps filling ~80 % of the plate, ~55 % of its height
-  let size = Math.round(B * 0.6);
+  if ('letterSpacing' in c) c.letterSpacing = '14px';
+  let size = 158;
   const setFont = () => {
-    c.font = `800 ${size}px 'Hanken Grotesk','Helvetica Neue',Arial,sans-serif`;
+    c.font = `700 ${size}px 'Hanken Grotesk','Helvetica Neue',Arial,sans-serif`;
   };
   setFont();
-  while (size > 60 && c.measureText('MAGZIN').width * 1.12 > L * 0.8) { size -= 4; setFont(); }
-  fnPerLayer(c, { W, Hc, L, B, STROKE, INSET, text: (fill) => {
-    c.save(); c.scale(1.12, 1); fill(); c.restore();
-  } });
+  while (size > 60 && c.measureText('MAGZIN').width > L - 190) { size -= 4; setFont(); }
+  fnPerLayer(c, { W, Hc, L, B, STROKE, INSET });
   return cv;
 }
 function blurred(cv, px) {
@@ -348,24 +400,28 @@ function blurred(cv, px) {
   c.drawImage(cv, 0, 0);
   return out;
 }
-const BODY_CSS = '#161618'; // hero finish per contract / swing-params
+const BODY_CSS = '#26272B'; // hero finish per contract / swing-params
 
 function buildBadgeCanvases(plateCss = BODY_CSS) {
-  const W = BW, Hc = BH;
-  // height: plate 0.75 with rounded rim → letters sunk to 0.25 (blur = molded slopes)
+  const W = 512, Hc = 1024;
+  // height: 0.5 ground → 0.60 plate → 0.30 groove + text (blur = molded slopes)
   const hCv = blurred(badgeDraw((c, g) => {
-    c.fillStyle = '#5a5a5a';
-    c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W);
-    c.fillStyle = '#c0c0c0';
+    c.fillStyle = '#808080';
+    c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W); // rotated frame
+    c.fillStyle = '#999999';
     stadiumPath(c, -g.L / 2, -g.B / 2, g.L, g.B, g.B / 2); c.fill();
-    c.fillStyle = '#404040';
-    g.text(() => c.fillText('MAGZIN', 0, 6));
-  }), 4);
+    c.strokeStyle = '#4d4d4d'; c.lineWidth = g.STROKE;
+    stadiumPath(c, -g.L / 2 + g.INSET, -g.B / 2 + g.INSET,
+      g.L - 2 * g.INSET, g.B - 2 * g.INSET, (g.B - 2 * g.INSET) / 2);
+    c.stroke();
+    c.fillStyle = '#4d4d4d'; c.fillText('MAGZIN', 0, 8);
+  }), 2.5);
   const hd = hCv.getContext('2d').getImageData(0, 0, W, Hc).data;
   const hb = new Float32Array(W * Hc);
   for (let i = 0; i < hb.length; i++) hb[i] = hd[i * 4] / 255;
 
-  const S = 9.0;
+  // normal from badge height (clamped both axes; features sit far from edges)
+  const S = 5.0;
   const ncv = document.createElement('canvas');
   ncv.width = W; ncv.height = Hc;
   const nc = ncv.getContext('2d');
@@ -385,21 +441,29 @@ function buildBadgeCanvases(plateCss = BODY_CSS) {
   }
   nc.putImageData(nimg, 0, 0);
 
-  // color: plate = body color everywhere (cap face is the plate), letters
-  // get only cavity occlusion — same plastic, no ink
+  // color: transparent outside the plate; plate = body color; recesses get a
+  // faint occlusion darkening only (no ink — the deboss is the same plastic)
   const mapCv = blurred(badgeDraw((c, g) => {
     c.fillStyle = plateCss;
-    c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W);
-    c.fillStyle = 'rgba(0,0,0,0.6)';
-    g.text(() => c.fillText('MAGZIN', 0, 6));
-  }), 1.5);
+    stadiumPath(c, -g.L / 2, -g.B / 2, g.L, g.B, g.B / 2); c.fill();
+    c.strokeStyle = 'rgba(0,0,0,0.30)'; c.lineWidth = g.STROKE + 6;
+    stadiumPath(c, -g.L / 2 + g.INSET, -g.B / 2 + g.INSET,
+      g.L - 2 * g.INSET, g.B - 2 * g.INSET, (g.B - 2 * g.INSET) / 2);
+    c.stroke();
+    c.fillStyle = 'rgba(0,0,0,0.30)'; c.fillText('MAGZIN', 0, 8);
+  }), 1);
 
-  // roughness: plate top a touch smoother (catches the light in the footage)
+  // roughness: plate slightly smoother than the grained body, recesses waxier
   const roughCv = blurred(badgeDraw((c, g) => {
-    c.fillStyle = '#7a7a7a';
+    c.fillStyle = '#b3b3b3';
     c.fillRect(-g.Hc / 2, -g.W / 2, g.Hc, g.W);
-    c.fillStyle = '#b0b0b0';
-    g.text(() => c.fillText('MAGZIN', 0, 6));
+    c.fillStyle = '#a3a3a3';
+    stadiumPath(c, -g.L / 2, -g.B / 2, g.L, g.B, g.B / 2); c.fill();
+    c.strokeStyle = '#8f8f8f'; c.lineWidth = g.STROKE + 6;
+    stadiumPath(c, -g.L / 2 + g.INSET, -g.B / 2 + g.INSET,
+      g.L - 2 * g.INSET, g.B - 2 * g.INSET, (g.B - 2 * g.INSET) / 2);
+    c.stroke();
+    c.fillStyle = '#8f8f8f'; c.fillText('MAGZIN', 0, 8);
   }), 2);
 
   return { mapCv, ncv, roughCv };
@@ -463,35 +527,39 @@ function buildMaterials(light) {
   // Molded polypropylene, molded finish — not paint: zero metalness, waxy
   // low-gloss sheen broken up by the grain (normal + roughness maps).
   const bm = bodyMaps();
-  // matte molded PP (footage): fine sandy grain, soft satin sheen, faint specks
+  // reel shader: molded PP — no paint, no clear coat, satin roughness,
+  // faint waxy sheen, fine grain + speckle; baked CAD AO in vertex colors
   const body = new THREE.MeshPhysicalMaterial({
-    color: 0x161618, metalness: 0.0, roughness: 1.0,
-    map: bm.speckTex,
-    normalMap: bm.normalTex, normalScale: new THREE.Vector2(0.45, 0.45),
+    color: 0x0f0f11, metalness: 0.0, roughness: 1.0,
+    map: bm.speckTex, vertexColors: true,
+    normalMap: bm.normalTex, normalScale: new THREE.Vector2(0.22, 0.22),
     roughnessMap: bm.roughTex,
-    ior: 1.49, sheen: 0.15, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xffffff),
+    ior: 1.49, specularIntensity: 0.85,
+    sheen: 0.12, sheenRoughness: 0.45, sheenColor: new THREE.Color(0xffffff),
     envMapIntensity: 1.0,
-  });
-  // the flat disc set into each tip face: smoother, darker, catches a highlight
-  const tip = new THREE.MeshPhysicalMaterial({
-    color: 0x1a1a1c, metalness: 0.0, roughness: 0.26, ior: 1.49, envMapIntensity: 1.2,
   });
   // unlit near-black interior = the depth shadow inside a real recessed well
   const holeWall = new THREE.MeshBasicMaterial({ color: 0x0b0a09, side: THREE.BackSide });
   const holeRim = new THREE.MeshBasicMaterial({ color: 0x0b0a09, side: THREE.DoubleSide });
-  // neodymium magnet behind each hole: bright gold in the footage
+  // neodymium magnet (nickel-plated, silver) sunk in shadow — bright cool
+  // metal, glints only when the well lines up with the light
+  // reel: neodymium with warm gold plating (#B8995E, roughness 0.34)
   const dot = new THREE.MeshStandardMaterial({
-    color: 0xD9B36A, metalness: 1.0, roughness: 0.3,
-    envMapIntensity: light ? 1.3 : 1.5,
+    color: 0xC9A666, metalness: 1.0, roughness: 0.3,
+    envMapIntensity: light ? 1.6 : 1.8,
+  });
+  // end-magnet cover: smooth dark disc in each tip face (photos)
+  const tipCap = new THREE.MeshPhysicalMaterial({
+    color: 0x111113, metalness: 0.0, roughness: 0.3, ior: 1.49, envMapIntensity: 1.0,
   });
   const bg = badgeMaps();
   const badge = new THREE.MeshStandardMaterial({
     map: bg.map, normalMap: bg.normal, normalScale: new THREE.Vector2(1.5, 1.5),
     roughnessMap: bg.rough,
     metalness: 0.0, roughness: 1.0,
-    envMapIntensity: 1.0,
+    envMapIntensity: 1.0, transparent: true,
   });
-  return { body, magnet: body, dot, badge, holeWall, holeRim, tip };
+  return { body, magnet: body, dot, badge, holeWall, holeRim, tipCap };
 }
 
 /* collection-only materials: body + badge share one tintable color; every
@@ -503,13 +571,13 @@ function buildTintMaterials(base) {
     map: bg.map, normalMap: bg.normal, normalScale: new THREE.Vector2(1.5, 1.5),
     roughnessMap: bg.rough,
     metalness: 0.0, roughness: 1.0,
-    envMapIntensity: 1.0,
+    envMapIntensity: 1.0, transparent: true,
   });
   body.color.set(0x101820);
   badge.color.set(0x101820);
   return {
     body, magnet: body, badge,
-    dot: base.dot, holeWall: base.holeWall, holeRim: base.holeRim, tip: base.tip,
+    dot: base.dot, holeWall: base.holeWall, holeRim: base.holeRim, tipCap: base.tipCap,
   };
 }
 
@@ -567,31 +635,7 @@ function displaceLathe(geo, yOff) {
       if (da > 0.068) continue;
       dip = Math.max(dip, 0.12 * (1 - smoothstep(0.038, 0.068, da)));
     }
-    let rr = r + d * taperTip * taperBadge - dip;
-    // flattened panel under the MAGZIN plate (front, phi≈0), blending out
-    // through the sculpted shoulders toward the collars
-    const phi = Math.atan2(v3.x, v3.z);
-    const ay = Math.abs(ys);
-    if (Math.cos(phi) > 0.2 && ay < PANEL_Y + 0.16) {
-      const flatR = PANEL_Z / Math.cos(phi);
-      if (flatR < rr) {
-        const k = 1 - smoothstep(PANEL_Y, PANEL_Y + 0.16, ay);
-        rr = rr + (flatR - rr) * k;
-      }
-    }
-    // sculpted shoulder scoop where the panel meets the collar (front half)
-    if (Math.cos(phi) > 0) {
-      rr -= 0.014 * Math.cos(phi) * gauss(ay, PANEL_Y + 0.12, 0.07);
-    }
-    // round dish on each side face near the collars (on the parting line)
-    for (const sy of [DISH_Y, -DISH_Y]) {
-      for (const sp of [Math.PI / 2, -Math.PI / 2]) {
-        let dp = phi - sp; dp = Math.atan2(Math.sin(dp), Math.cos(dp));
-        const dd = Math.hypot(dp * r, ys - sy);
-        if (dd < DISH_R) rr -= DISH_D * Math.cos((dd / DISH_R) * Math.PI / 2) ** 2;
-      }
-    }
-    const s = Math.max(0.05, rr) / r;
+    const s = Math.max(0.05, r + d * taperTip * taperBadge - dip) / r;
     pos.setX(i, v3.x * s);
     pos.setZ(i, v3.z * s);
   }
@@ -619,9 +663,9 @@ function sliceGeo(y0, y1, bore) {
   const lo = y0 + 0.001, hi = y1 - 0.001;
   const pts = [];
   if (bore === 'lo') {
-    pts.push(new THREE.Vector2(0, lo - c + 0.006));
-    pts.push(new THREE.Vector2(TIP_DISC_R, lo - c + 0.006));
-    pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, lo - c));
+    pts.push(new THREE.Vector2(0, lo - c + 0.035));
+    pts.push(new THREE.Vector2(R_BORE, lo - c + 0.035));
+    pts.push(new THREE.Vector2(R_BORE, lo - c));
   } else {
     pts.push(new THREE.Vector2(0, lo - c));
   }
@@ -631,9 +675,9 @@ function sliceGeo(y0, y1, bore) {
     pts.push(new THREE.Vector2(stickRadius(Math.abs(y)), y - c));
   }
   if (bore === 'hi') {
-    pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, hi - c));
-    pts.push(new THREE.Vector2(TIP_DISC_R, hi - c - 0.006));
-    pts.push(new THREE.Vector2(0, hi - c - 0.006));
+    pts.push(new THREE.Vector2(R_BORE, hi - c));
+    pts.push(new THREE.Vector2(R_BORE, hi - c - 0.035));
+    pts.push(new THREE.Vector2(0, hi - c - 0.035));
   } else {
     pts.push(new THREE.Vector2(0, hi - c));
   }
@@ -647,17 +691,17 @@ function sliceGeo(y0, y1, bore) {
  * piece (the real product is one molded part; only anatomy needs slices) */
 function onePieceGeo() {
   const pts = [];
-  pts.push(new THREE.Vector2(0, -H + 0.006));
-  pts.push(new THREE.Vector2(TIP_DISC_R, -H + 0.006));
-  pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, -H));
+  pts.push(new THREE.Vector2(0, -H + 0.035));
+  pts.push(new THREE.Vector2(R_BORE, -H + 0.035));
+  pts.push(new THREE.Vector2(R_BORE, -H));
   const N = Math.round(STICK_LEN / 0.014); // 250 — latheV() depends on this
   for (let i = 0; i <= N; i++) {
     const y = -H + STICK_LEN * (i / N);
     pts.push(new THREE.Vector2(stickRadius(Math.abs(y)), y));
   }
-  pts.push(new THREE.Vector2(TIP_DISC_R + 0.008, H));
-  pts.push(new THREE.Vector2(TIP_DISC_R, H - 0.006));
-  pts.push(new THREE.Vector2(0, H - 0.006));
+  pts.push(new THREE.Vector2(R_BORE, H));
+  pts.push(new THREE.Vector2(R_BORE, H - 0.035));
+  pts.push(new THREE.Vector2(0, H - 0.035));
   const geo = new THREE.LatheGeometry(pts, RADIAL);
   displaceLathe(geo, 0);
   return geo;
@@ -712,7 +756,7 @@ function wellMatrices(gyList, yOff) {
         new THREE.Vector3(dir.x * radial, gy - yOff, dir.z * radial), q, one);
       rims.push(at(qF, surf));
       walls.push(at(qU, surf - 0.048)); // wall spans surf+0.002 … surf−0.098
-      brass.push(at(qF, surf - 0.05));
+      brass.push(at(qF, surf - 0.055));
     }
   }
   return { rims, walls, brass };
@@ -722,9 +766,9 @@ const GEO = {};
 function getGeo() {
   if (!GEO.onePiece) {
     // well stack templates
-    GEO.wellRim = new THREE.RingGeometry(0.06, 0.07, 32);
+    GEO.wellRim = new THREE.RingGeometry(0.058, 0.082, 32);
     GEO.wellWall = new THREE.CylinderGeometry(0.064, 0.058, 0.10, 24, 1, true);
-    GEO.wellBrass = new THREE.CircleGeometry(0.034, 24); // magnet face: a bright spot inside a dark hole
+    GEO.wellBrass = new THREE.CircleGeometry(0.046, 24);
     const wellSet = (gyList, yOff) => {
       const m = wellMatrices(gyList, yOff);
       return {
@@ -758,31 +802,8 @@ function getGeo() {
     };
 
     // debossed stadium MAGZIN plate: slim curved strip riding the middle band
-    // raised stadium plate, a real solid with a rounded top edge, sitting on
-    // the flat panel (base sunk into it so no gap shows at its sides)
-    {
-      const w = PLATE_W / 2, l = PLATE_L / 2, rr = w;
-      const sh = new THREE.Shape();
-      sh.moveTo(-w, -l + rr);
-      sh.lineTo(-w, l - rr);
-      sh.absarc(0, l - rr, rr, Math.PI, 0, true);
-      sh.lineTo(w, -l + rr);
-      sh.absarc(0, -l + rr, rr, 0, Math.PI, true);
-      const depth = 0.03;
-      const geo = new THREE.ExtrudeGeometry(sh, {
-        depth, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006,
-        bevelSegments: 3, curveSegments: 24,
-      });
-      // cap UVs: map the plate footprint 1:1 onto the badge texture
-      const uv = geo.attributes.uv, pos = geo.attributes.position;
-      for (let i = 0; i < uv.count; i++) {
-        uv.setXY(i, pos.getX(i) / (PLATE_W + 0.012) + 0.5, pos.getY(i) / (PLATE_L + 0.012) + 0.5);
-      }
-      geo.translate(0, 0, PANEL_Z - 0.01);
-      geo.computeVertexNormals();
-      GEO.badge = geo;
-    }
-    GEO.tipDisc = new THREE.CircleGeometry(TIP_DISC_R + 0.004, 48);
+    GEO.badge = new THREE.CylinderGeometry(
+      R_MID + 0.012, R_MID + 0.012, 0.62, 48, 1, true, -0.48, 0.96);
     GEO.flash = new THREE.RingGeometry(0.4, 0.5, 48);
   }
   return GEO;
@@ -796,30 +817,21 @@ function addWellSet(parent, set, mats) {
   );
 }
 
-/* flat glossier disc in each tip face (footage) */
-function addTipDiscs(parent, mats, yTop, yBot) {
-  const g = getGeo();
-  if (yTop !== null) {
-    const d = new THREE.Mesh(g.tipDisc, mats.tip || mats.body);
-    d.rotation.x = -Math.PI / 2; d.position.y = yTop - 0.004;
-    parent.add(d);
-  }
-  if (yBot !== null) {
-    const d = new THREE.Mesh(g.tipDisc, mats.tip || mats.body);
-    d.rotation.x = Math.PI / 2; d.position.y = yBot + 0.004;
-    parent.add(d);
-  }
-}
-
 /* seamless one-piece rod — what every chain scene shows */
 function createSeamlessStick(mats, withBadge = true) {
+  if (CAD) {
+    const stick = new THREE.Group();
+    stick.name = 'MagzinStick';
+    stick.add(new THREE.Mesh(CAD.geo, mats.body), new THREE.Mesh(CAD.mags, mats.dot),
+      new THREE.Mesh(CAD.caps, mats.tipCap));
+    return stick;
+  }
   const g = getGeo();
   const stick = new THREE.Group();
   stick.name = 'MagzinStick';
   stick.add(new THREE.Mesh(g.onePiece, mats.body));
   addWellSet(stick, g.chainWells, mats);
-  if (withBadge) stick.add(new THREE.Mesh(g.badge, [mats.badge, mats.body]));
-  addTipDiscs(stick, mats, H, -H);
+  if (withBadge) stick.add(new THREE.Mesh(g.badge, mats.badge));
   return stick;
 }
 
@@ -847,10 +859,8 @@ export function createMagzinStick(mats, withBadge = true) {
     grp.userData.baseY = y;
     grp.add(new THREE.Mesh(g.slices[name], mats.body));
     if (g.sliceWells[name]) addWellSet(grp, g.sliceWells[name], mats);
-    if (name === 'UpperMagnet') addTipDiscs(grp, mats, H - y, null);
-    if (name === 'LowerMagnet') addTipDiscs(grp, mats, null, -H - y);
     if (name === 'MiddleBody' && withBadge) {
-      grp.add(new THREE.Mesh(g.badge, [mats.badge, mats.body]));
+      grp.add(new THREE.Mesh(g.badge, mats.badge));
     }
     stick.add(grp);
     segments[name] = grp;
@@ -884,7 +894,7 @@ function makeRenderer(canvas, exposure) {
   const renderer = new THREE.WebGLRenderer({
     canvas, antialias: true, alpha: false, powerPreference: 'high-performance',
   });
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMapping = THREE.AgXToneMapping; // the reel's Blender view transform
   renderer.toneMappingExposure = exposure;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   return renderer;
@@ -933,7 +943,7 @@ function makeApp(id, sectionId, exposure, fallbackH) {
  * Two 4-stick chains on black forming a tall inverted-V / open compass,
  * long soft key highlight, idle drift + eased mouse parallax + scroll pull. */
 function buildHero(darkEnv, mats) {
-  const app = makeApp('hero-canvas', 'hero', 1.1, 1);
+  const app = makeApp('hero-canvas', 'hero', 1.7, 1);
   if (!app) return;
   const { scene, camera } = app;
   scene.background = new THREE.Color(0x1b1a18);
@@ -1007,7 +1017,7 @@ function buildHero(darkEnv, mats) {
  * the edges, accelerate, hesitate/align near contact, SNAP with overshoot,
  * flash ring + camera push, then the joined bar eases to horizontal rest. */
 function buildPull(darkEnv, mats) {
-  const app = makeApp('pull-canvas', 'pull', 1.1, 1);
+  const app = makeApp('pull-canvas', 'pull', 1.7, 1);
   if (!app) return;
   const { scene, camera } = app;
   scene.background = new THREE.Color(0x1b1a18);
@@ -1255,7 +1265,7 @@ function buildAnatomy(lightEnv, matsLight) {
  * Labels track FOLD / FOLD AGAIN / FLIP / SETTLE / RETURN. Reduced motion:
  * the static block, no label cycling. */
 function buildBeats(darkEnv, mats) {
-  const app = makeApp('beats-canvas', 'beats', 1.1, 0.56);
+  const app = makeApp('beats-canvas', 'beats', 1.7, 0.56);
   if (!app) return;
   const { scene, camera } = app;
   scene.background = new THREE.Color(0x1b1a18);
@@ -1269,7 +1279,7 @@ function buildBeats(darkEnv, mats) {
   scene.add(key, rim, hemi);
 
   const C = 2 * STICK_STEP;        // quarter pitch: every seam = STICK_STEP
-  const R = R_CAP;                 // row spacing = one diameter = 2R
+  const R = CAD_HALF;              // row spacing = the real 7.78 mm section
   const P1 = { x: 0, y: R };       // fold 1: middle joint's top tangent
   const P2 = { x: -C, y: 3 * R };  // fold 2: the stack's top tangent
   const BLOCK = { cx: -1.5 * C, cy: 3 * R };
@@ -1552,8 +1562,9 @@ function buildCollection(lightEnv, matsBase) {
 }
 
 /* ------------------------------------------------------------------ init */
-function init() {
+async function init() {
   try {
+    try { await loadCad(); } catch (e) { console.warn(`${TAG} CAD model failed, using fallback:`, e); }
     const rmq = window.matchMedia('(prefers-reduced-motion: reduce)');
     reduced = rmq.matches;
     if (rmq.addEventListener) {
@@ -1644,9 +1655,7 @@ if (document.readyState === 'loading') {
  * The module still self-initializes above; on pages without the site's
  * canvases each scene no-ops with a console.warn, which is expected. */
 export {
+  loadCad,
   buildEnvTexture, buildMaterials, createSeamlessStick, createChain,
   chainHalf, makeRenderer, STICK_LEN, STICK_STEP, R_CAP,
 };
-
-/* test hook: lets a bench page build the exact same piece (no side effects) */
-export const __p3d = { buildMaterials, buildEnvTexture, createSeamlessStick, createChain };
