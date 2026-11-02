@@ -31,7 +31,7 @@ function initSwatches() {
     }
     setLabelText(chip, en, ar);
     setLabelText(nameLine, `COLOR — ${en}`, `اللون — ${ar}`);
-    window.dispatchEvent(new CustomEvent('magzin:color', { detail: { hex } }));
+    window.dispatchEvent(new CustomEvent('magzin:color', { detail: { hex, name: en } }));
   };
 
   for (const b of buttons) b.addEventListener('click', () => select(b));

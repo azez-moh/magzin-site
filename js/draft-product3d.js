@@ -198,7 +198,16 @@ async function loadCad() {
     new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -sg * Math.PI / 2),
     new THREE.Vector3(1, 1, 1)));
   const caps = mergeTransformed(capG, capM);
-  CAD = { geo, mags, caps };
+  // the body material reads per-vertex AO; give the end covers a flat value
+  // so they don't render grey when they share it (collection colors)
+  caps.setAttribute('color', new THREE.BufferAttribute(
+    new Float32Array(caps.attributes.position.count * 3).fill(0.9), 3));
+  // the two end magnets inside the cap blocks: invisible in opaque colors,
+  // the silver band seen near each end through the translucent ones
+  const coreG = new THREE.CylinderGeometry(0.25, 0.25, 0.5, 32);
+  const coreM = [1, -1].map((sg) => new THREE.Matrix4().makeTranslation(0, sg * (hdr.bore.y - 0.38), 0));
+  const cores = mergeTransformed(coreG, coreM);
+  CAD = { geo, mags, caps, cores };
   return CAD;
 }
 
@@ -564,6 +573,27 @@ function buildMaterials(light) {
 
 /* collection-only materials: body + badge share one tintable color; every
  * other scene keeps the hero finish (#26272B) untouched. */
+/* ------------------------------------------------- store color variants
+ * Sampled from the magzin.store product photos (2026-11-02). Three are
+ * opaque molded PP (Coconut Milk, Black, Navy); five are translucent,
+ * frosted PP that lets the inner magnets show (Silver, Baby Blue — really
+ * a mint — Baby Pink, Light Purple; Burgundy is the deeper, glossier one).
+ * trans = transmission, rough = multiplier on the grain roughness map,
+ * att = colour the light picks up inside the plastic, dist = how fast.
+ * Blue and Gray have no photos on the store: kept opaque from their swatch. */
+const VARIANTS = {
+  'COCONUT MILK': { exp: 1.22, color: '#FFD994', trans: 0, rough: 1.1, dot: '#A88452' },
+  'SILVER':       { color: '#FCF4E4', trans: 0.55, rough: 0.6, att: '#D8D2C6', dist: 2.5, dot: '#C9CBCE' },
+  'NAVY':         { exp: 0.78, env: 0.55, color: '#0C1030', trans: 0, rough: 0.95, dot: '#B8995E' },
+  'BURGUNDY':     { color: '#84170C', trans: 0.4, rough: 0.5, att: '#A02A1C', dist: 1.0, dot: '#C9A666' },
+  'BABY BLUE':    { color: '#B4E9D6', trans: 0.55, rough: 0.6, att: '#9ED8C6', dist: 2.5, dot: '#C9CBCE' },
+  'BABY PINK':    { exp: 1.05, color: '#FFB3AB', trans: 0.55, rough: 0.6, att: '#F4AAB0', dist: 2.5, dot: '#C9CBCE' },
+  'BLACK':        { exp: 0.62, env: 0.45, color: '#060606', trans: 0, rough: 1.0, dot: '#C9A666' },
+  'LIGHT PURPLE': { color: '#D597CC', trans: 0.55, rough: 0.6, att: '#C9A0D2', dist: 2.5, dot: '#C9CBCE' },
+  'BLUE':         { color: '#97A2B2', trans: 0, rough: 1.0, dot: '#C9A666' },
+  'GRAY':         { color: '#918C86', trans: 0, rough: 1.0, dot: '#C9A666' },
+};
+
 function buildTintMaterials(base) {
   const body = base.body.clone(); // shares normal/rough maps, own color
   const bg = tintBadgeMaps();
@@ -573,11 +603,19 @@ function buildTintMaterials(base) {
     metalness: 0.0, roughness: 1.0,
     envMapIntensity: 1.0, transparent: true,
   });
-  body.color.set(0x101820);
-  badge.color.set(0x101820);
+  // translucent-capable copy: transmission 0 renders exactly like the
+  // opaque body; thickness = the 7.78 mm section
+  body.transmission = 0;
+  body.thickness = 0.74;
+  body.attenuationColor = new THREE.Color(0xffffff);
+  body.attenuationDistance = Infinity;
+  body.color.set(VARIANTS.BLACK.color);
+  badge.color.set(VARIANTS.BLACK.color);
+  const dot = base.dot.clone();
+  const core = new THREE.MeshStandardMaterial({ color: 0xBFC3C8, metalness: 1.0, roughness: 0.35 });
   return {
-    body, magnet: body, badge,
-    dot: base.dot, holeWall: base.holeWall, holeRim: base.holeRim, tipCap: base.tipCap,
+    body, magnet: body, badge, dot, core, tipCap: null,
+    holeWall: base.holeWall, holeRim: base.holeRim,
   };
 }
 
@@ -823,7 +861,8 @@ function createSeamlessStick(mats, withBadge = true) {
     const stick = new THREE.Group();
     stick.name = 'MagzinStick';
     stick.add(new THREE.Mesh(CAD.geo, mats.body), new THREE.Mesh(CAD.mags, mats.dot),
-      new THREE.Mesh(CAD.caps, mats.tipCap));
+      new THREE.Mesh(CAD.caps, mats.tipCap || mats.body));
+    if (mats.core) stick.add(new THREE.Mesh(CAD.cores, mats.core));
     return stick;
   }
   const g = getGeo();
@@ -1485,16 +1524,19 @@ function buildBeats(darkEnv, mats) {
  * listens for 'magzin:color' CustomEvents (detail {hex}) dispatched by the
  * swatch buttons and cross-fades body + badge to the chosen store color. */
 function buildCollection(lightEnv, matsBase) {
-  const app = makeApp('collection-canvas', 'collection', 1.0, 0.5);
+  const app = makeApp('collection-canvas', 'collection', 1.45, 0.5);
   if (!app) return;
   const { scene, camera } = app;
   scene.background = new THREE.Color(0xe6d8c3);
   scene.environment = lightEnv;
 
-  const key = new THREE.DirectionalLight(0xffffff, 1.4);
+  // bright product-photo studio (the store shots): broad key + soft fill
+  const key = new THREE.DirectionalLight(0xffffff, 1.9);
   key.position.set(-4, 6, 5);
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8578, 0.45);
-  scene.add(key, hemi);
+  const fill = new THREE.DirectionalLight(0xfff6ea, 0.6);
+  fill.position.set(5, 1, 4);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8578, 0.55);
+  scene.add(key, fill, hemi);
 
   const mats = buildTintMaterials(matsBase); // collection-only tintable copy
 
@@ -1524,32 +1566,67 @@ function buildCollection(lightEnv, matsBase) {
   camera.position.set(0, 0, 18);
   camera.lookAt(0, 0, 0);
 
-  // color state
-  const cur = new THREE.Color(0x101820);
-  const target = new THREE.Color(0x101820);
+  // variant state: color, transparency, frost, inner tint and magnet finish
+  // all cross-fade together when a swatch is picked
+  const mkState = (v) => ({
+    color: new THREE.Color(v.color), trans: v.trans, rough: v.rough,
+    att: new THREE.Color(v.att || '#ffffff'), dist: v.dist || 50,
+    dot: new THREE.Color(v.dot), env: v.env || 1, exp: v.exp || 1,
+  });
+  const cur = mkState(VARIANTS.BLACK);
+  let target = mkState(VARIANTS.BLACK);
+  const applyState = (st) => {
+    mats.body.color.copy(st.color);
+    mats.badge.color.copy(st.color);
+    mats.body.transmission = st.trans;
+    mats.body.roughness = st.rough;
+    mats.body.attenuationColor.copy(st.att);
+    mats.body.attenuationDistance = st.dist;
+    mats.dot.color.copy(st.dot);
+    mats.body.envMapIntensity = st.env;
+    // like the store photographer: each color gets its own exposure
+    app.renderer.toneMappingExposure = 1.45 * st.exp;
+  };
+  applyState(cur);
   window.addEventListener('magzin:color', (e) => {
-    const hex = e.detail && e.detail.hex;
-    if (!hex) return;
-    target.set(hex);
+    const d = e.detail || {};
+    const v = VARIANTS[(d.name || '').toUpperCase()] ||
+      Object.values(VARIANTS).find((x) => x.color.toUpperCase() === String(d.hex || '').toUpperCase()) ||
+      (d.hex ? { color: d.hex, trans: 0, rough: 1, dot: '#C9A666' } : null);
+    if (!v) return;
+    target = mkState(v);
     if (reduced) { // no animated fade under reduced motion — apply instantly
-      cur.copy(target);
-      mats.body.color.copy(target);
-      mats.badge.color.copy(target);
+      Object.assign(cur, mkState(v));
+      applyState(cur);
     }
     app.dirty = true;
   });
+  const near = (a, b) => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b) < 0.004;
 
   let last = -1;
   app.update = (t) => {
     // cross-fade toward the picked color; keep dirty so the fade animates
     // even through the 30fps cap and reduced-motion gating
-    if (!cur.equals(target)) {
-      cur.lerp(target, 0.14);
-      if (Math.abs(cur.r - target.r) + Math.abs(cur.g - target.g) +
-          Math.abs(cur.b - target.b) < 0.004) cur.copy(target);
-      mats.body.color.copy(cur);
-      mats.badge.color.copy(cur);
+    const busy = !near(cur.color, target.color) || !near(cur.att, target.att) ||
+      !near(cur.dot, target.dot) || Math.abs(cur.trans - target.trans) > 0.002 ||
+      Math.abs(cur.rough - target.rough) > 0.002 || Math.abs(cur.dist - target.dist) > 0.01 ||
+      Math.abs(cur.env - target.env) > 0.002 || Math.abs(cur.exp - target.exp) > 0.002;
+    if (busy) {
+      const k = 0.14;
+      cur.color.lerp(target.color, k); cur.att.lerp(target.att, k); cur.dot.lerp(target.dot, k);
+      cur.trans += (target.trans - cur.trans) * k;
+      cur.rough += (target.rough - cur.rough) * k;
+      cur.env += (target.env - cur.env) * k;
+      cur.exp += (target.exp - cur.exp) * k;
+      // distance fades in log space (50 = effectively clear → 0.35 deep tint)
+      cur.dist = Math.exp(Math.log(cur.dist) + (Math.log(target.dist) - Math.log(cur.dist)) * k);
+      applyState(cur);
       app.dirty = true;
+    } else if (cur.trans !== target.trans || cur.dist !== target.dist) {
+      // snap the last hair of the fade so values land exactly on the variant
+      cur.color.copy(target.color); cur.att.copy(target.att); cur.dot.copy(target.dot);
+      cur.trans = target.trans; cur.rough = target.rough; cur.dist = target.dist; cur.env = target.env; cur.exp = target.exp;
+      applyState(cur);
     }
     if (!reduced) {
       if (t - last < 1 / 30 && !app.dirty) return; // 30fps cap
